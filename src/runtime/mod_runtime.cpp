@@ -175,11 +175,14 @@ struct Runtime {
     std::map<std::string, PackageSelection> selections;
     Validation validation;
     Validation committed;
+    std::map<std::string, std::map<std::string, std::map<std::string, std::string>>>
+        committed_options;
     std::map<std::string, std::map<std::string, std::string>>
         committed_asset_paths;
     std::string error;
     bool initialized = false;
     bool adaptive_view_enabled = false;
+    int view_width = 0;
 };
 
 Runtime& state() {
@@ -1929,6 +1932,7 @@ bool mod_runtime_initialize(const fs::path& root,
     // Keep this explicit: an initialize failure must never leave a prior
     // committed external-asset path reachable through the plugin API.
     runtime.committed_asset_paths.clear();
+    runtime.committed_options.clear();
     runtime.root = root;
     runtime.game_id = game_id;
     runtime.rom_sha1 = rom_sha1;
@@ -1987,6 +1991,7 @@ bool mod_runtime_commit_impl(const fs::path& rom_path, bool allow_picker,
     Runtime& runtime = state();
     if (!runtime.initialized) return true;
     runtime.committed_asset_paths.clear();
+    runtime.committed_options.clear();
     if (!rom_path.empty()) {
         std::string digest;
         if (!sha1_file(rom_path, digest, &runtime.error)) {
@@ -2023,6 +2028,12 @@ bool mod_runtime_commit_impl(const fs::path& rom_path, bool allow_picker,
         if (!package || !target_matches(*package, runtime))
             continue;
         const PackageSelection& selection = package_selection(runtime, *package);
+        for (const Option& option : package->options) {
+            const Feature* owner = find_feature(*package, option.feature_id);
+            if (owner && feature_enabled(runtime, *package, *owner))
+                runtime.committed_options[package->id][owner->id][option.id] =
+                    option_value(runtime, *package, *owner, option);
+        }
         for (const RequiredAsset& asset : package->required_assets) {
             const Feature* owner = find_feature(*package, asset.feature_id);
             if (!owner || !feature_enabled(runtime, *package, *owner)) continue;
@@ -2043,6 +2054,7 @@ void mod_runtime_activate_plugins() {
     Runtime& runtime = state();
     if (!runtime.initialized) return;
     runtime.adaptive_view_enabled = false;
+    runtime.view_width = 0;
     // Presentation belongs to the currently committed plugin set. Clear the
     // old immutable buffer before reset callbacks so disabling/recommitting a
     // package can never leave a stale foreign frame on screen.
@@ -2117,6 +2129,28 @@ extern "C" int gba_mod_set_adaptive_view_enabled(int enabled) {
 
 extern "C" int gba_mod_adaptive_view_enabled(void) {
     return gbarecomp::state().adaptive_view_enabled ? 1 : 0;
+}
+
+extern "C" int gba_mod_set_view_width(int width) {
+    if (width != 0 && (width < 240 || width > 65535)) return 0;
+    gbarecomp::state().view_width = width;
+    return 1;
+}
+
+extern "C" int gba_mod_view_width(void) {
+    return gbarecomp::state().view_width;
+}
+
+extern "C" const char* gba_mod_option_value(
+    const char* package_id, const char* feature_id, const char* option_id) {
+    if (!package_id || !feature_id || !option_id) return nullptr;
+    const auto& options = gbarecomp::state().committed_options;
+    const auto package = options.find(package_id);
+    if (package == options.end()) return nullptr;
+    const auto feature = package->second.find(feature_id);
+    if (feature == package->second.end()) return nullptr;
+    const auto option = feature->second.find(option_id);
+    return option == feature->second.end() ? nullptr : option->second.c_str();
 }
 
 extern "C" int gba_mod_publish_foreign_background(const char* plugin_id,

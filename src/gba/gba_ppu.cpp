@@ -46,6 +46,7 @@ extern "C" int (*g_ws_obj_attr_x_provider)(int, std::uint16_t,
 // still run first, so a game can re-place known-safe HUD sprites and clip the
 // rest.
 extern "C" int g_ws_obj_native_clip = 0;
+extern "C" const WsMarginObjPixel* (*g_ws_obj_margin_provider)(int, int*, int*) = nullptr;
 
 namespace {
 
@@ -1953,6 +1954,26 @@ void render_scanline_wide(uint8_t* rgb, uint32_t y, uint16_t dispcnt,
 
     uint32_t bldy = static_cast<uint32_t>(io[0x54] | (io[0x55] << 8)) & 0x1Fu;
     if (bldy > 16u) bldy = 16u;
+    if ((dispcnt & 0x1000u) && g_ws_obj_margin_provider && !g_ws_pillarbox) {
+        int left = 0, width = 0;
+        const auto* pixels = g_ws_obj_margin_provider(static_cast<int>(y), &left, &width);
+        if (pixels && width > 0 && width <= static_cast<int>(GbaPpu::kMaxRenderWidth) &&
+            left >= -static_cast<int>(GbaPpu::kMaxRenderWidth) &&
+            left <= static_cast<int>(GbaPpu::kMaxRenderWidth)) {
+            for (int i = 0; i < width; ++i) {
+                const int hx = left + i, x = hx + static_cast<int>(ox);
+                if ((hx >= 0 && hx < 240) || x < 0 || x >= static_cast<int>(out_w)) continue;
+                const auto& pixel = pixels[i];
+                // Authored world margins are independent of native HUD/window
+                // rectangles, just like the regular-BG providers above. A
+                // game's WINOUT often disables OBJ beyond the stock screen.
+                if ((pixel.color & 0x8000) || pixel.priority > 3 ||
+                    (!layer_enabled(x, 4) && !g_ws_authored_margin_layers)) continue;
+                submit(x, pixel.color, pixel.priority * 256 + (pixel.order & 127), 4,
+                       false, (second_targets & (1u << 4)) != 0);
+            }
+        }
+    }
     for (uint32_t x = 0; x < out_w; ++x) {
         uint8_t* dst = row + x * 3;
         // OBJ-only presentations (notably the real GBA BIOS logo) author the

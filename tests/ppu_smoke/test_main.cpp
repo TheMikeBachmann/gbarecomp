@@ -177,12 +177,17 @@ void test_extended_view_geometry_and_clamp() {
     }
 
     ppu.set_view_margins(120, 120, 0, 0);
-    if (ppu.render_width() != 480 ||
-        ppu.render_width() != gba::GbaPpu::kMaxRenderWidth) {
+    if (ppu.render_width() != 480) {
         std::fprintf(stderr, "extended-view 480x160 capacity mismatch\n");
         std::exit(1);
     }
 
+    ppu.set_view_margins(164, 165, 0, 0);
+    if (ppu.render_width() != 569 || ppu.view_extra_left() != 164 ||
+        ppu.view_extra_right() != 165) {
+        std::fprintf(stderr, "32:9 odd-width geometry mismatch\n");
+        std::exit(1);
+    }
     ppu.set_view_margins(1000, 1000, 7, 9);
     if (ppu.render_width() != gba::GbaPpu::kMaxRenderWidth ||
         ppu.render_height() != gba::GbaPpu::kScreenHeight ||
@@ -222,8 +227,8 @@ void test_extended_view_capability_policy() {
         std::exit(1);
     }
     g = resolve_view_geometry(600, 600, false, kEngineMax);
-    if (g.width != 480 || g.extra_left != 120 || g.extra_right != 120) {
-        std::fprintf(stderr, "480x160 engine capacity was not enforced\n");
+    if (g.width != 576 || g.extra_left != 168 || g.extra_right != 168) {
+        std::fprintf(stderr, "576x160 engine capacity was not enforced\n");
         std::exit(1);
     }
     g = resolve_view_geometry(288, 240, true, kEngineMax);
@@ -295,7 +300,7 @@ void test_extended_view_preserves_authentic_center() {
 
     std::vector<uint8_t> wide(gba::GbaPpu::kMaxFramebufferBytes, 0);
     const std::size_t authentic_stride = gba::GbaPpu::kScreenWidth * 3u;
-    for (const uint32_t extra : {24u, 72u, 120u}) {
+    for (const uint32_t extra : {24u, 72u, 120u, 168u}) {
         f.ppu.set_view_margins(extra, extra, 0, 0);
         std::fill(wide.begin(), wide.end(), 0);
         f.ppu.render(wide.data(), dispcnt, f.io.data(), f.vram.data(),
@@ -612,6 +617,49 @@ void test_extended_view_obj_native_clip_is_opt_in() {
     expect_pixel(f.rgb.data() + 8u * 3u, 255, 0, 0,
                  "native render changed by OBJ clip flag");
     gba::g_ws_obj_native_clip = 0;
+}
+
+const gba::WsMarginObjPixel* margin_object_row(int, int* left, int* width) {
+    static std::array<gba::WsMarginObjPixel, 288> row;
+    row.fill({0x001f, 2, 0});
+    *left = -24; *width = 288;
+    return row.data();
+}
+
+void test_authored_margin_objects_preserve_center_and_depth() {
+    Fixture f;
+    disable_all_objects(f);
+    store16(&f.io[0x08], 0x0181); // 8bpp BG0, priority 1, map block 1
+    std::fill_n(f.vram.begin(), 64, 1);
+    store16(&f.pal[2], 0x7c00); // blue foreground
+    f.ppu.set_view_margins(24,24,0,0);
+    std::vector<uint8_t> wide(gba::GbaPpu::kMaxFramebufferBytes, 0);
+    gba::g_ws_obj_margin_provider = margin_object_row;
+    f.ppu.render(wide.data(),0x1100,f.io.data(),f.vram.data(),f.oam.data(),f.pal.data());
+    expect_pixel(wide.data(),0,0,255,"margin NPC must stay behind foreground BG");
+    store16(&f.io[0x08], 0x0183); // BG moves behind NPC
+    f.ppu.render(wide.data(),0x1100,f.io.data(),f.vram.data(),f.oam.data(),f.pal.data());
+    expect_pixel(wide.data(),255,0,0,"authored margin NPC missing");
+    expect_pixel(wide.data()+24*3,0,0,255,"authored NPC altered native center");
+    expect_pixel(wide.data()+264*3,255,0,0,"right margin NPC missing");
+    // Emerald's ordinary field window: all world layers inside the native
+    // viewport, only BG0 in WINOUT. Decoded NPC pixels must survive this final
+    // compositor gate when the game explicitly authors its margin layers.
+    store16(&f.io[0x40],0x00ff); store16(&f.io[0x44],0x00ff);
+    store16(&f.io[0x48],0x001f); store16(&f.io[0x4a],0x0001);
+    f.ppu.render(wide.data(),0x3100,f.io.data(),f.vram.data(),f.oam.data(),f.pal.data());
+    expect_pixel(wide.data(),0,0,255,"default OBJ margin ignored native window policy");
+    gba::g_ws_authored_margin_layers = 1;
+    f.ppu.render(wide.data(),0x3100,f.io.data(),f.vram.data(),f.oam.data(),f.pal.data());
+    expect_pixel(wide.data(),255,0,0,"WINOUT culled authored NPC margin");
+    expect_pixel(wide.data()+24*3,0,0,255,"authored NPC window policy leaked into native center");
+    gba::g_ws_authored_margin_layers = 0;
+    f.ppu.render(wide.data(),0x0100,f.io.data(),f.vram.data(),f.oam.data(),f.pal.data());
+    expect_pixel(wide.data(),0,0,255,"authored NPC ignored OBJ disable");
+    f.ppu.set_view_margins(0,0,0,0);
+    f.ppu.render(f.rgb.data(),0x1100,f.io.data(),f.vram.data(),f.oam.data(),f.pal.data());
+    expect_pixel(f.rgb.data(),0,0,255,"native PPU consumed margin callback");
+    gba::g_ws_obj_margin_provider = nullptr;
 }
 
 void test_extended_view_extends_nearest_window_edge() {
@@ -1706,6 +1754,7 @@ int main() {
     test_extended_view_obj_x_is_explicitly_opt_in();
     test_extended_view_obj_attr_x_is_explicitly_opt_in();
     test_extended_view_obj_native_clip_is_opt_in();
+    test_authored_margin_objects_preserve_center_and_depth();
     test_extended_view_extends_nearest_window_edge();
     test_bitmap_mode3_direct_color_and_affine_origin();
     test_bitmap_mode4_palette_transparency_and_page_flip();

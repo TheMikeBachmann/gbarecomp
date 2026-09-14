@@ -103,11 +103,11 @@ public:
     // the API still accepts top/bottom (clamped to 0) so callers stay generic.
     // These margins are present-time host state and are NEVER serialized into
     // the snapshot (the save format is unchanged).
-    // Experimental horizontal envelope: 120 pixels per side gives an exact
-    // 480x160 maximum while the default remains the literal 240x160 path.
-    static constexpr uint32_t kMaxExtraX = 120;
+    // Horizontal capacity includes 32:9 (569x160). Individual games still
+    // advertise their own ceilings; native rendering remains the default.
+    static constexpr uint32_t kMaxExtraX = 168;
     static constexpr uint32_t kMaxExtraY = 0;    // vertical deferred; bump when invented-scanline path lands
-    static constexpr uint32_t kMaxRenderWidth  = kScreenWidth  + 2u * kMaxExtraX;  // 480
+    static constexpr uint32_t kMaxRenderWidth  = kScreenWidth  + 2u * kMaxExtraX;  // 576
     static constexpr uint32_t kMaxRenderHeight = kScreenHeight + 2u * kMaxExtraY;  // 160
     static constexpr std::size_t kMaxFramebufferBytes =
         static_cast<std::size_t>(kMaxRenderWidth) * kMaxRenderHeight * 3;
@@ -249,5 +249,18 @@ extern "C" int (*g_ws_obj_attr_x_provider)(int oam_index,
 // providers above run first and may re-place known-safe sprites. Default 0
 // keeps the established expanded-viewport OBJ test.
 extern "C" int g_ws_obj_native_clip;
+
+// Read-only, game-authored OBJ coverage for expanded margins. RGB555 bit 15
+// marks a transparent pixel. Priority uses the hardware 0..3 BG/OBJ order.
+// The PPU never consumes this layer inside the native 240px viewport.
+// g_ws_authored_margin_layers makes it independent of native window masks,
+// matching authored BG margins. DISPCNT, BG depth and color effects still apply.
+struct WsMarginObjPixel {
+    std::uint16_t color = 0x8000;
+    std::uint8_t priority = 3;
+    std::uint8_t order = 127;
+};
+extern "C" const WsMarginObjPixel* (*g_ws_obj_margin_provider)(
+    int screen_y, int* hardware_left, int* width);
 
 }  // namespace gba

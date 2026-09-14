@@ -51,6 +51,17 @@ int gba_mod_register_reset_callback(GBAModActivationCallback callback);
 int gba_mod_set_adaptive_view_enabled(int enabled);
 int gba_mod_adaptive_view_enabled(void);
 
+// Optional initial/fixed logical width; 0 means no plugin request. The runner
+// still clamps this to the game's capability. Reset on every activation pass.
+int gba_mod_set_view_width(int width);
+int gba_mod_view_width(void);
+
+// Immutable values from the last successful commit, only for enabled features
+// of matching packages. Null for unavailable values. Valid until next commit
+// or initialize; editing staged launcher choices does not change this snapshot.
+const char* gba_mod_option_value(const char* package_id, const char* feature_id,
+                                 const char* option_id);
+
 // Publish an immutable native-sized BGR555 foreign background for a plugin
 // that is present in the currently committed, hash-validated feature set.
 // The pointer is consumed only by the PPU compositor; nullptr is rejected so

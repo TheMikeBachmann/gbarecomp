@@ -1147,6 +1147,8 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     gba::g_ws_tilemap_provider = nullptr;
     gba::g_ws_obj_x_provider = nullptr;
     gba::g_ws_obj_attr_x_provider = nullptr;
+    gba::g_ws_obj_native_clip = 0;
+    gba::g_ws_obj_margin_provider = nullptr;
     gba::g_ws_bg_x_provider = nullptr;
     gba::g_ws_bg_x_provider_layers = 0xFu;
     gba::g_ws_affine_filter_enabled = 0;
@@ -1525,6 +1527,14 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
                 }
             }
         }
+#if defined(GBARECOMP_ENABLE_MODS)
+        if (opts.mod_owns_adaptive_view) {
+            if (gba_mod_view_width() > 0)
+                requested_width = gba_mod_view_width();
+            else if (!gba_mod_adaptive_view_enabled())
+                requested_width = 240;
+        }
+#endif
         const ViewGeometry geometry = resolve_view_geometry(
             requested_width, opts.max_view_width, ws_wip_enabled,
             gba::GbaPpu::kMaxRenderWidth);
@@ -1556,14 +1566,18 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
             extended_view_initialized = true;
         }
         if (ppu.view_expanded() && !args.quiet) {
+            const char* view_hint = "set --view-width 240 for the faithful view";
+#if defined(GBARECOMP_ENABLE_MODS)
+            if (opts.mod_owns_adaptive_view)
+                view_hint = "disable the game's view mod for the faithful view";
+#endif
             std::fprintf(stderr,
                 "[gbarecomp:runtime] extended view ON: requested=%dx160 "
-                "effective=%ux%u margins=%u/%u; set --view-width 240 for "
-                "the faithful view\n",
+                "effective=%ux%u margins=%u/%u; %s\n",
                 requested_width,
                 ppu.render_width(), ppu.render_height(),
                 static_cast<unsigned>(ppu.view_extra_left()),
-                static_cast<unsigned>(ppu.view_extra_right()));
+                static_cast<unsigned>(ppu.view_extra_right()), view_hint);
         }
     }
     // Boktai's solar sensor: opt-in per game (no ROM signature exists for it).
@@ -2108,6 +2122,26 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         std::fflush(wram_trace_log);
     };
 
+    // Install presentation policy before either execution path starts. TCP
+    // stepping must exercise the same frame callback as normal/windowed play.
+    auto publish_extended_view_frame = [&]() {
+        if (!opts.extended_view_frame) return;
+        ExtendedViewFrameInfo info{};
+        info.frame_count = ppu.frame_count();
+        info.view_width = ppu.render_width();
+        info.extra_left = ppu.view_extra_left();
+        info.extra_right = ppu.view_extra_right();
+        info.io = bus.io().raw();
+        info.io_size = gba::GbaIo::kIoSize;
+        opts.extended_view_frame(&info);
+    };
+    if (opts.extended_view_frame) {
+        runtime_set_frame_start_hook(publish_extended_view_frame);
+        publish_extended_view_frame();
+    }
+    struct ClearFrameStartHook {
+        ~ClearFrameStartHook() { runtime_set_frame_start_hook(nullptr); }
+    } clear_frame_start_hook;
     if (args.tcp_port > 0) {
         // ── Free-run threading model ───────────────────────────────────────
         // The game CORE runs on a dedicated thread; the TCP server runs on THIS
@@ -2372,17 +2406,6 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         }
     };
     FramePhaseRing frame_phase;
-    auto publish_extended_view_frame = [&]() {
-        if (!opts.extended_view_frame) return;
-        ExtendedViewFrameInfo info{};
-        info.frame_count = ppu.frame_count();
-        info.view_width = ppu.render_width();
-        info.extra_left = ppu.view_extra_left();
-        info.extra_right = ppu.view_extra_right();
-        info.io = bus.io().raw();
-        info.io_size = gba::GbaIo::kIoSize;
-        opts.extended_view_frame(&info);
-    };
     auto apply_runtime_view_width = [&](std::uint32_t target) -> bool {
         const ViewGeometry geometry = resolve_view_geometry(
             static_cast<int>(target),
@@ -3128,11 +3151,6 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     if (args.window) {
         runtime_set_host_service_hook([&]() { win.service_events(); });
     }
-    if (opts.extended_view_frame) {
-        runtime_set_frame_start_hook(publish_extended_view_frame);
-        publish_extended_view_frame();
-    }
-
     // Present-in-place (structural fix for frame-boundary resume dispatch-misses).
     // When windowed, register a hook so the per-VBlank frame-present yield presents
     // the frame from INSIDE runtime_should_yield and resumes the guest in place —
@@ -3630,7 +3648,6 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // pacer, live_fb, …) go out of scope at function return.
     runtime_set_frame_present_hook(nullptr);
     runtime_set_host_service_hook(nullptr);
-    runtime_set_frame_start_hook(nullptr);
     frame_phase.dump();  // HP-002: flush the phase ring (env-gated CSV)
     // HP-002: flush the opt-in MMIO write ring (gba_io.cpp) to CSV.
     // GBARECOMP_MMIO_DUMP=<path> arms capture. Offline analysis derives the scanline of

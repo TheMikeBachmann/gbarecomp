@@ -271,6 +271,21 @@ the generic launcher control hidden and set
 `RunOptions::mod_owns_adaptive_view`; the package state then remains
 authoritative over stale config, CLI, or environment values.
 
+Trusted view plugins can read validated enabled-feature options with
+`gba_mod_option_value(package_id, feature_id, option_id)`. Values are immutable
+until the next commit/initialization; unavailable or disabled options return
+null. `gba_mod_set_view_width(width)` requests a fixed/initial logical width
+(0 clears the request); the game capability still bounds it. Activation resets
+both the adaptive and fixed-width requests. Disabling a mod-owned view restores
+240 pixels even when an old CLI or environment setting requests expansion.
+
+The expanded PPU supports up to 576 horizontal pixels, including 32:9 at 569.
+The default game limit remains 240. A game may publish read-only RGB555 OBJ
+margin rows through `g_ws_obj_margin_provider`; the compositor never consumes
+them inside native X 0..239. `g_ws_authored_margin_layers` exempts these authored
+pixels from native window layer masks, as it does authored BG pixels, while
+preserving BG depth and OBJ enable. All hooks are cleared between games.
+
 The initial operation vocabulary is intentionally limited to trusted
 activation plugins. Future guarded ROM writes, asset overlays, and hooks must
 retain the same pre-boot validation and no-arbitrary-code model.

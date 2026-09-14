@@ -43,8 +43,9 @@ struct RunOptions {
     // Packages target this stable ID plus builtin_rom_sha1 and may activate
     // only trusted callbacks statically registered by the game executable.
     const char* mod_game_id = nullptr;
-    // Make an adaptive-view feature authoritative over legacy TOML, CLI, and
-    // environment inputs. Games with unrelated catalogs leave this false.
+    // Make a view feature authoritative over legacy TOML, CLI, and environment
+    // inputs, including its fixed/initial width request. Games with unrelated
+    // catalogs leave this false.
     bool mod_owns_adaptive_view = false;
 
     // Extended horizontal view is a game-owned enhancement capability, not a

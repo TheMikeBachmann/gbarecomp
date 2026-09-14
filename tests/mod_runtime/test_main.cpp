@@ -71,6 +71,7 @@ size_t activation_stream_pull(void*, int16_t* dst, size_t max_frames) {
 void activate_view() {
     g_active = true;
     (void)gba_mod_set_adaptive_view_enabled(1);
+    (void)gba_mod_set_view_width(569);
     g_stream = gba_mod_audio_stream_register_s16_mono(
         activation_stream_pull, nullptr);
     g_stream_registered_during_activation =
@@ -209,6 +210,15 @@ int main() {
         "name = \"Other feature\"\n"
         "group = \"Display\"\n"
         "default_enabled = false\n\n"
+        "[[option]]\n"
+        "feature = \"adaptive-view\"\n"
+        "id = \"aspect\"\n"
+        "label = \"Aspect ratio\"\n"
+        "type = \"choice\"\n"
+        "default = \"32:9\"\n"
+        "[[option.choice]]\n"
+        "value = \"32:9\"\n"
+        "label = \"32:9\"\n\n"
         "[[plugin]]\n"
         "feature = \"adaptive-view\"\n"
         "id = \"test.adaptive-view\"\n\n"
@@ -386,6 +396,13 @@ int main() {
     if (!g_active || !gba_mod_adaptive_view_enabled() ||
         !g_stream_registered_during_activation || !g_stream_reregistered_in_place)
         return fail("enabled plugin did not activate");
+    const char* aspect = gba_mod_option_value("test.adaptive-view", "adaptive-view", "aspect");
+    if (!aspect || std::string(aspect) != "32:9" || gba_mod_view_width() != 569 ||
+        gba_mod_set_view_width(239) || gba_mod_set_view_width(-1) ||
+        gba_mod_set_view_width(65536) || gba_mod_view_width() != 569 ||
+        gba_mod_option_value("test.adaptive-view", "other-feature", "aspect") ||
+        gba_mod_option_value(nullptr, "adaptive-view", "aspect"))
+        return fail("committed option or fixed view request contract failed");
     if (!gba_mod_audio_stream_set_enabled(g_stream, 1) ||
         !gba_mod_audio_stream_play(g_stream, 100) ||
         !gba_mod_audio_stream_set_native_gain_percent(g_stream, 0)) {
@@ -622,7 +639,8 @@ int main() {
     if (!g_reset_saw_foreign_presentation_clear ||
         gba::foreign_presentation_internal::background() != nullptr ||
         gba::foreign_presentation_internal::obj_focus() != nullptr ||
-        g_active || gba_mod_adaptive_view_enabled())
+        g_active || gba_mod_adaptive_view_enabled() || gba_mod_view_width() ||
+        gba_mod_option_value("test.adaptive-view", "adaptive-view", "aspect"))
         return fail("disabled plugin did not restore native view");
     if (gba_mod_required_asset_path("test.adaptive-view", "zelda1-rom"))
         return fail("disabled package exposed a required asset");
