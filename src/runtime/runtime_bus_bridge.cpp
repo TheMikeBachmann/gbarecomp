@@ -793,7 +793,12 @@ struct IdleSite {
     bool have_period;
     bool valid;
 };
-static std::unordered_map<uint32_t, IdleSite> g_idle_sites;
+// Per-thread: a site's proof compares one machine's registers, cycle span and
+// disturbance epoch across two iterations. Keyed on guest PC alone and shared,
+// a second machine sitting in the same loop would satisfy the first machine's
+// proof, and the prover would fast-forward the wrong clock — corrupting timing
+// silently rather than failing.
+static thread_local std::unordered_map<uint32_t, IdleSite> g_idle_sites;
 static const bool g_idle_elision_on = [] {
     const char* e = std::getenv("GBARECOMP_IDLE_ELISION");
     bool on = !(e && e[0] == '0' && e[1] == '\0');   // default ON
@@ -1042,12 +1047,15 @@ extern "C" bool runtime_should_yield(void) {
             long long s = e ? std::atoll(e) : 0;
             return s > 0 ? s : 4;
         }();
-        static bool tripped = false;
-        static std::chrono::steady_clock::time_point last_halt =
+        // Per-thread: each machine is watched on its own. Shared, whichever
+        // machine HALTs keeps resetting the timer for all of them, so a genuine
+        // freeze in one guest is masked by its healthy neighbours.
+        static thread_local bool tripped = false;
+        static thread_local std::chrono::steady_clock::time_point last_halt =
             std::chrono::steady_clock::now();
-        static unsigned long long last_vcount_spin_progress = 0;
-        static unsigned long long last_vcount_spin_vblank = g_runtime_vblank_starts;
-        static unsigned long long calls = 0;
+        static thread_local unsigned long long last_vcount_spin_progress = 0;
+        static thread_local unsigned long long last_vcount_spin_vblank = g_runtime_vblank_starts;
+        static thread_local unsigned long long calls = 0;
         if (halted) {
             last_halt = std::chrono::steady_clock::now();
         } else if (g_vcount_spin_progress != last_vcount_spin_progress &&
