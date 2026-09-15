@@ -902,11 +902,13 @@ extern "C" void runtime_idle_backedge(uint32_t header_pc) {
 // (then the yield DOES unwind, so the runner can exit). Set by the windowed
 // runner and by bounded, passive headless frame runs; unset for TCP and
 // frame-driven input/replay paths, which keep the unwind-and-redispatch path.
-std::function<bool()> g_frame_present_hook;
+// Per-thread: each machine decides when its own frame is done, so several can
+// present independently.
+thread_local std::function<bool()> g_frame_present_hook;
 // Sticky quit: once the present hook requests exit, EVERY subsequent yield must
 // unwind (return true) so the guest's whole host call stack pops back to the
 // runner — one return only frees one frame. Cleared when a hook is (re)set.
-bool g_frame_present_quit = false;
+thread_local bool g_frame_present_quit = false;
 
 // Present-in-place deliberately preserves the generated host call chain across
 // frames, but some guest script engines keep a call active for thousands of
