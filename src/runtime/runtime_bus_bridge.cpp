@@ -499,7 +499,7 @@ extern "C" uint32_t runtime_mul_cycles(uint32_t rs_value,
 // True while inside tick_devices. Timed/FIFO DMA fires from here and accumulates
 // its stolen cycles in GbaIo; the drain (which itself ticks devices) must run
 // OUTSIDE this window to avoid re-entrancy — this guard makes that explicit.
-static bool g_in_device_tick = false;
+static thread_local bool g_in_device_tick = false;
 struct DeviceTickGuard {
     bool prev;
     DeviceTickGuard() : prev(g_in_device_tick) { g_in_device_tick = true; }
@@ -608,8 +608,8 @@ static inline void cyc_probe(const char* what, uint32_t amt) {
 // (tick_devices) and reschedules. tick_devices chunks internally to exact
 // sub-event boundaries, so materializing a batched delta is bit-identical to
 // per-instruction ticking — at a fraction of the call overhead.
-static unsigned long long g_pending_cycles = 0;
-static long long          g_event_budget   = 0;
+static thread_local unsigned long long g_pending_cycles = 0;
+static thread_local long long          g_event_budget   = 0;
 
 static inline void recompute_event_budget(gba::GbaBus* bus, gba::GbaPpu* ppu) {
     uint32_t h  = ppu->cycles_until_next_event();

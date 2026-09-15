@@ -68,10 +68,10 @@ extern "C" thread_local unsigned long long g_runtime_vblank_starts;
 namespace {
 
 constexpr uint32_t kTraceSize = 4096u;
-RuntimeTraceEntry g_trace[kTraceSize] = {};
-uint32_t g_trace_write = 0;
-uint32_t g_trace_count = 0;
-uint32_t g_trace_seq = 0;
+thread_local RuntimeTraceEntry g_trace[kTraceSize] = {};
+thread_local uint32_t g_trace_write = 0;
+thread_local uint32_t g_trace_count = 0;
+thread_local uint32_t g_trace_seq = 0;
 
 constexpr uint32_t kCallReturnStackSize = 1024u;
 thread_local uint32_t g_call_return_stack[kCallReturnStackSize] = {};
