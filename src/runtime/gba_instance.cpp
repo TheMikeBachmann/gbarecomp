@@ -6,6 +6,11 @@
 namespace gbarecomp {
 
 void GbaInstance::activate() {
+    // The IO block answers VCOUNT and the DISPSTAT compare bits straight from
+    // the PPU, and returns zero when it has no PPU to ask. A machine missing
+    // this wiring still runs and still counts frames, but every VCOUNT read the
+    // guest makes comes back 0 — so a scanline-polling wait loop never ends.
+    bus.io().set_ppu(&ppu);
     set_active_bus(&bus);
     set_active_ppu(&ppu);
     runtime_init(&bus);
