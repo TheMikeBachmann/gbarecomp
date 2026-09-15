@@ -41,7 +41,11 @@ extern "C" {
 // ArmCpuState + the ARM_BANK_* / CPSR_*_BIT macros are defined in
 // runtime_arm_types.h (shared with the overlay shim).
 
-extern ArmCpuState g_cpu;
+// Thread-local so several guest machines can run concurrently, one per host
+// thread (GBA link-cable multiplayer). The self-heal overlay binds &g_cpu once
+// via GbaOverlayCallbacks and cannot follow this, so it must stay disabled
+// whenever more than one instance is live.
+extern thread_local ArmCpuState g_cpu;
 
 // Optional game-owned override for immediate operands in recompiled THUMB
 // data-processing instructions. Generated code passes the exact guest

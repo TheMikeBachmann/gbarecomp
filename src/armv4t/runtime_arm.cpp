@@ -53,7 +53,7 @@ extern "C" int overlay_try_dispatch(uint32_t pc, int thumb);
 
 // ── CPU state ──────────────────────────────────────────────────────
 
-extern "C" ArmCpuState g_cpu = {};
+extern "C" thread_local ArmCpuState g_cpu = {};
 extern "C" RuntimeThumbAluImmediateOverride
     g_runtime_thumb_alu_imm_override = nullptr;
 extern "C" RuntimeBusReadOverride g_runtime_bus_read_override = nullptr;
