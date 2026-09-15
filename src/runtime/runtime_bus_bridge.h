@@ -10,7 +10,7 @@ namespace gba { class GbaPpu; }
 // runtime_tick. The debug step-one-frame primitive stops on its increment
 // so the recomp's TCP `step` parks at VBlank-start, matching the
 // interpreter and mGBA oracles. Defined in runtime_bus_bridge.cpp.
-extern "C" unsigned long long g_runtime_vblank_starts;
+extern "C" thread_local unsigned long long g_runtime_vblank_starts;
 
 namespace gbarecomp {
 

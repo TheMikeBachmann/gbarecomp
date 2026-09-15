@@ -15,7 +15,7 @@
 // runtime_arm.cpp ring style; lazily allocated on the first write. The cycle and
 // pc stamps come from the recomp runtime globals (declared here to avoid pulling
 // the ArmCpuState layout into this lib).
-extern "C" unsigned long long g_runtime_cycles;
+extern "C" thread_local unsigned long long g_runtime_cycles;
 extern "C" uint32_t runtime_current_pc(void);
 
 namespace gba {

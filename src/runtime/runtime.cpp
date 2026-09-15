@@ -79,7 +79,7 @@
 // at the actual vectoring site. The TCP `counters` command surfaces it via
 // ctx.irq_entries (the run-loop local never increments — IRQs are taken in
 // runtime_tick, not here). See MC-HP-002 IRQ-delivery comparison.
-extern "C" unsigned long long g_runtime_irq_entries;
+extern "C" thread_local unsigned long long g_runtime_irq_entries;
 
 // Present-in-place hook setter (defined in runtime_bus_bridge.cpp). Registering
 // a hook makes the per-VBlank frame-present yield present + resume in place

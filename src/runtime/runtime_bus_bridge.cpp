@@ -46,7 +46,7 @@ extern "C" uint32_t g_runtime_break_pc = 0;
 // ppu.frame_count() convention) parked the recomp ~68 scanlines / one
 // frame of game-logic later than the oracles, manufacturing a spurious
 // "recomp runs a frame ahead" when diffing memory at the same step index.
-extern "C" unsigned long long g_runtime_vblank_starts = 0;
+extern "C" thread_local unsigned long long g_runtime_vblank_starts = 0;
 
 // ── Phase profiler (GBARECOMP_PHASE_PROF=1) ─────────────────────────────────
 // De-confounds the guest-PC sampler's biggest attribution trap: PPU pixel
@@ -84,11 +84,11 @@ static const bool g_phase_prof = [] {
     }
     return on;
 }();
-static unsigned long long g_runtime_yielded_vblank_start = 0;
+static thread_local unsigned long long g_runtime_yielded_vblank_start = 0;
 // Live IRQ-handler nesting depth (defined in armv4t/runtime_arm.cpp: ++ on IRQ
 // entry, -- after the handler unwinds). Used by the vblank-yield guard below to
 // avoid yielding while an IRQ handler is on the host stack.
-extern "C" uint32_t g_irq_nest_depth;
+extern "C" thread_local uint32_t g_irq_nest_depth;
 
 // Cumulative guest-cycle clock (MC-HP-002 cycle-aligned divergence hunt).
 // Incremented by runtime_tick on EVERY tick — both the per-instruction exec
@@ -97,7 +97,7 @@ extern "C" uint32_t g_irq_nest_depth;
 // summed the halt path, which is why it was incomparable to the interpreter's
 // fixed-quantum clock.) runtime_trace_event stamps this onto every ring entry
 // so the recomp and the bios_smoke interp oracle align by identical cycles.
-extern "C" unsigned long long g_runtime_cycles = 0;
+extern "C" thread_local unsigned long long g_runtime_cycles = 0;
 
 // ── Stage 2 idle-loop elision: disturbance epoch + skip counters ─────────────
 // Bumped whenever something happens that could change a watched poll value or
@@ -105,16 +105,16 @@ extern "C" unsigned long long g_runtime_cycles = 0;
 // polling), or a device-event materialization (tick_devices). The per-site
 // prover (runtime_idle_backedge) requires it unchanged across the two proof
 // iterations. See runtime_arm.h.
-extern "C" unsigned long long g_idle_disturb_epoch = 0;
-extern "C" unsigned long long g_runtime_state_epoch = 0;
+extern "C" thread_local unsigned long long g_idle_disturb_epoch = 0;
+extern "C" thread_local unsigned long long g_runtime_state_epoch = 0;
 // Diagnostics for the exit banner: cycles/iterations the prover fast-forwarded.
 static unsigned long long g_idle_skipped_cycles = 0;
 static unsigned long long g_idle_skipped_iters  = 0;
 static unsigned long long g_idle_confirmed_sites = 0;
-static uint32_t g_last_mmio_read_addr = 0;
-static uint32_t g_last_mmio_read_width = 0;
-static uint32_t g_last_mmio_read_pc = 0;
-static unsigned long long g_vcount_spin_progress = 0;
+static thread_local uint32_t g_last_mmio_read_addr = 0;
+static thread_local uint32_t g_last_mmio_read_width = 0;
+static thread_local uint32_t g_last_mmio_read_pc = 0;
+static thread_local unsigned long long g_vcount_spin_progress = 0;
 
 // P6 sljit differential gate — shadow-tick mode. While g_runtime_shadow_tick is
 // set (during a throwaway validation or transactional guest re-run), runtime_tick
@@ -128,8 +128,8 @@ extern "C" unsigned long long g_runtime_shadow_cycles = 0;
 
 namespace gbarecomp {
 
-static gba::GbaBus* g_active_bus = nullptr;
-static gba::GbaPpu* g_active_ppu = nullptr;
+static thread_local gba::GbaBus* g_active_bus = nullptr;
+static thread_local gba::GbaPpu* g_active_ppu = nullptr;
 
 // ── Guest-PC sampling profiler (debug tooling) ─────────────────────────
 // A background thread samples the guest PC (g_cpu.R[15]) while the
@@ -196,6 +196,10 @@ static void sampler_loop() {
     auto next_dump = std::chrono::steady_clock::now() +
         std::chrono::seconds(live_secs > 0 ? live_secs : 86400);
     while (g_sampling.load(std::memory_order_relaxed)) {
+        // Reads the SAMPLER thread's own g_cpu, which is thread-local and stays
+        // zeroed — so this samples PC 0, not the guest. Sampling a guest thread
+        // again means handing this loop a pointer to that thread's register
+        // file. Opt-in via GBARECOMP_SAMPLE, so ordinary runs are unaffected.
         g_pc_hist[g_cpu.R[15]]++;  // racy read; approximate is fine
         if (live_secs > 0 && std::chrono::steady_clock::now() >= next_dump) {
             dump_sample_hist("live");

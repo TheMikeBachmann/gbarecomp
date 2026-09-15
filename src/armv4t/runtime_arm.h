@@ -80,7 +80,7 @@ extern RuntimeRamDispatchHook g_runtime_ram_dispatch_hook;
 // mutable region without passing through runtime_dispatch first.
 typedef int (*RuntimeForceInterpHook)(uint32_t pc, int thumb);
 extern RuntimeForceInterpHook g_runtime_force_interp_hook;
-extern int g_runtime_force_interp_step_active;
+extern thread_local int g_runtime_force_interp_step_active;
 
 // Only exact PCs opted in by the recompiler config call this helper. The
 // universal/default generated path keeps the compile-time operand and emits no
@@ -292,7 +292,7 @@ int gba_mod_function_entry(uint32_t entry_pc, int thumb, ArmCpuState* cpu);
 // return into the middle of an already-recompiled function (e.g. a
 // WaitForVBlank busy-spin) re-enters the WHOLE native function at the right
 // point instead of fragmenting it into dispatch-chained pieces.
-extern uint32_t g_runtime_resume_pc;
+extern thread_local uint32_t g_runtime_resume_pc;
 
 // Dedicated always-on IRQ-vector log (MC-HP-002): one entry per IRQ vectoring,
 // dumped as CSV. Armed by env GBARECOMP_IRQ_LOG. g_runtime_irq_from_halt is set
@@ -300,7 +300,7 @@ extern uint32_t g_runtime_resume_pc;
 // vector woke the CPU from HALT.
 void runtime_irq_log_record(uint32_t src, uint32_t ret, uint32_t cpsr);
 uint32_t runtime_irq_log_save_file(const char* path);
-extern uint32_t g_runtime_irq_from_halt;
+extern thread_local uint32_t g_runtime_irq_from_halt;
 // Live TCP query peer of the IRQ-vector log (Axis 3 — accuracy burndown). The
 // ring records the IRQ TAKE point (vectoring): cycle stamp, active source mask
 // (IE & IF), return address, saved CPSR, and the from-HALT flag. Raise-time (the
@@ -349,17 +349,17 @@ void runtime_idle_backedge(uint32_t header_pc);
 // device event materialization. The idle prover requires it to be unchanged
 // across the two proof iterations. (Correctness-first: false invalidations
 // only cost a re-prove; a missed bump would be unsound.)
-extern unsigned long long g_idle_disturb_epoch;
+extern thread_local unsigned long long g_idle_disturb_epoch;
 // Monotonic host-side notification for presentation caches that are not part
 // of the serialized GBA state. Incremented after every successful state load.
-extern unsigned long long g_runtime_state_epoch;
+extern thread_local unsigned long long g_runtime_state_epoch;
 // Cumulative guest-cycle clock. Incremented by runtime_tick on EVERY tick
 // (per-instruction exec ticks AND halt-pump chunks), so it is the authoritative
 // total-cycle count — unlike runtime.cpp's `cycles_elapsed`, which only tallied
 // the halt path (the MC-HP-002 "cycles incomparable" red herring). Reset to 0
 // at machine reset (runtime_trace_reset). Stamped onto every ring entry so the
 // recomp and interp oracle can be aligned by identical cycle counts. (MC-HP-002.)
-extern unsigned long long g_runtime_cycles;
+extern thread_local unsigned long long g_runtime_cycles;
 
 // P6 sljit differential gate — shadow-tick mode. While g_runtime_shadow_tick is
 // nonzero (only during a healed shard's throwaway validation re-run) runtime_tick

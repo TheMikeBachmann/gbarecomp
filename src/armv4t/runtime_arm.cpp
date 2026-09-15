@@ -59,11 +59,11 @@ extern "C" RuntimeThumbAluImmediateOverride
 extern "C" RuntimeBusReadOverride g_runtime_bus_read_override = nullptr;
 extern "C" RuntimeRamDispatchHook g_runtime_ram_dispatch_hook = nullptr;
 extern "C" RuntimeForceInterpHook g_runtime_force_interp_hook = nullptr;
-extern "C" int g_runtime_force_interp_step_active = 0;
+extern "C" thread_local int g_runtime_force_interp_step_active = 0;
 
 // VBlank-start counter (defined in src/runtime/runtime_bus_bridge.cpp).
 // Used to frame-gate the mem-write watchpoint.
-extern "C" unsigned long long g_runtime_vblank_starts;
+extern "C" thread_local unsigned long long g_runtime_vblank_starts;
 
 namespace {
 
@@ -74,8 +74,8 @@ uint32_t g_trace_count = 0;
 uint32_t g_trace_seq = 0;
 
 constexpr uint32_t kCallReturnStackSize = 1024u;
-uint32_t g_call_return_stack[kCallReturnStackSize] = {};
-uint32_t g_call_return_depth = 0;
+thread_local uint32_t g_call_return_stack[kCallReturnStackSize] = {};
+thread_local uint32_t g_call_return_depth = 0;
 // Barrier into the GLOBAL guest call-return stack. An IRQ is dispatched on top
 // of whatever mainline (or enclosing-IRQ) call frames are live, but the handler's
 // guest returns/cancels must NOT match or pop those interrupted frames — doing so
@@ -84,7 +84,7 @@ uint32_t g_call_return_depth = 0;
 // never reached, so WaitForVBlank spins forever). runtime_irq() raises this floor
 // to the live depth for the duration of the handler; should_return/cancel_return
 // never look below it. Saved/restored across nested IRQs by runtime_irq().
-uint32_t g_call_return_floor = 0;
+thread_local uint32_t g_call_return_floor = 0;
 
 const char* trace_kind_name(uint32_t kind) {
     switch (kind) {
@@ -324,7 +324,7 @@ extern "C" unsigned g_runtime_insn_trace = 0;
 // debug probe assigns its own handler. Called from the generated function
 // prologue with the guest entry PC while R0..R3 still hold the AAPCS args.
 extern "C" void (*g_runtime_fn_entry_hook)(uint32_t) = nullptr;
-extern "C" uint32_t g_runtime_resume_pc = 0u;
+extern "C" thread_local uint32_t g_runtime_resume_pc = 0u;
 
 // BIOS-HLE hook (see runtime_arm.h). nullptr = disabled = pure LLE (the
 // recompiled BIOS handles every SWI; byte-identical to the un-hooked build).
@@ -454,7 +454,7 @@ uint32_t     g_irq_log_count = 0;
 }  // namespace
 // Set by runtime_tick's wake-from-HALT path just before runtime_irq; cleared
 // after. Tells the log whether this vector woke the CPU from HALT.
-extern "C" uint32_t g_runtime_irq_from_halt = 0;
+extern "C" thread_local uint32_t g_runtime_irq_from_halt = 0;
 
 extern "C" void runtime_irq_log_record(uint32_t src, uint32_t ret, uint32_t cpsr) {
     // Always-on ring (Release too): recording is unconditional so the live
@@ -565,7 +565,7 @@ namespace runtime_arm {
 
 // We keep this as a void* so the header doesn't need to drag in
 // GbaBus. The bus type is known to the implementation file only.
-void* g_bus_handle = nullptr;
+thread_local void* g_bus_handle = nullptr;
 
 }  // namespace runtime_arm
 }  // namespace gbarecomp
@@ -1066,8 +1066,8 @@ extern "C" void runtime_msr_spsr(uint32_t value, uint32_t mask) {
 // IRQ nesting depth (defined below) and the depth at which the most recent
 // IRQ-mode exception return (iret) fired. runtime_irq() uses the latter to
 // know when its handler has fully unwound — see the re-dispatch loop there.
-extern "C" uint32_t g_irq_nest_depth;
-extern "C" uint32_t g_irq_iret_depth;
+extern "C" thread_local uint32_t g_irq_nest_depth;
+extern "C" thread_local uint32_t g_irq_iret_depth;
 
 extern "C" void runtime_exception_return(uint32_t new_pc) {
     uint32_t old_cpsr = g_cpu.cpsr;
@@ -1199,7 +1199,7 @@ extern "C" void runtime_swi(uint32_t swi_imm) {
 // IRQ delivery against the interpreter oracle — the MC-HP-002 1-game-frame-lead
 // test (does the recomp vector an extra/early VBlank IRQ?). Never reset; probes
 // compare per-frame deltas.
-extern "C" unsigned long long g_runtime_irq_entries = 0;
+extern "C" thread_local unsigned long long g_runtime_irq_entries = 0;
 // Live host-recursion nesting depth of IRQ delivery (++ on entry, -- after the
 // handler unwinds) and the high-water mark. Distinguishes the MC-HP-002 storm
 // shape: deep nesting (depth climbs → a long handler spanning the next IRQ
@@ -1208,12 +1208,12 @@ extern "C" unsigned long long g_runtime_irq_entries = 0;
 // an IRQ handler is currently on the host stack — the cpsr mode alone can't,
 // because GBA IRQ dispatchers (e.g. FireRed's intr_main) switch to System mode
 // mid-handler to allow nested IRQs.
-extern "C" uint32_t      g_irq_nest_depth = 0;
-extern "C" unsigned long long g_runtime_irq_max_depth = 0;
+extern "C" thread_local uint32_t      g_irq_nest_depth = 0;
+extern "C" thread_local unsigned long long g_runtime_irq_max_depth = 0;
 // Depth at which the most recent IRQ-mode iret fired (set in
 // runtime_exception_return). runtime_irq() resets this to 0 on entry and
 // spins its drive-to-completion loop until it equals the IRQ's own depth.
-extern "C" uint32_t      g_irq_iret_depth = 0;
+extern "C" thread_local uint32_t      g_irq_iret_depth = 0;
 
 extern "C" void runtime_irq(uint32_t return_address) {
     ++g_runtime_irq_entries;

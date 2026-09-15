@@ -422,7 +422,7 @@ extern "C" const char* g_tick_ctx;
 // game's VBlank wait spins forever. Pairs with the call-return floor in
 // runtime_irq() (g_call_return_floor): the floor keeps the cancel cascade from
 // corrupting mainline frames; this keeps the self-heal bridge from bailing early.
-extern "C" uint32_t g_irq_nest_depth;
+extern "C" thread_local uint32_t g_irq_nest_depth;
 
 // runtime_bridge_interpret — the interpret-the-missed-subtree core, factored out
 // of runtime_dispatch_miss so the P6 sljit differential gate can reuse it as its
