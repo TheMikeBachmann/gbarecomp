@@ -1082,33 +1082,6 @@ bool parse_cli(int argc, char** argv, Args* args, std::string* err) {
     return true;
 }
 
-// Initialize the C-ABI CPU state (visible to recompiled code) to
-// GBA reset: SVC mode, I/F masked, ARM state, PC=0, SP set to
-// the post-BIOS stack base (recompiled BIOS will reprogram banked
-// SPs to their canonical values).
-void reset_recomp_cpu() {
-    runtime_trace_reset();
-    for (int i = 0; i < 16; ++i) g_cpu.R[i] = 0;
-    for (int i = 0; i < ARM_BANK_COUNT; ++i) {
-        g_cpu.banked_sp[i] = 0;
-        g_cpu.banked_lr[i] = 0;
-        g_cpu.banked_spsr[i] = 0;
-    }
-    for (int i = 0; i < 5; ++i) { g_cpu.r8_12_user[i] = 0; g_cpu.r8_12_fiq[i] = 0; }
-    g_cpu.R[13] = 0x03007FE0;
-    g_cpu.cpsr = CPSR_I_BIT | CPSR_F_BIT | 0x13u /* SVC */;
-    // Seed the banked stack pointers to the canonical GBA post-reset values
-    // (GBATEK "GBA Reset"; what hardware / mGBA / the bios_smoke interpreter
-    // oracle leave after BIOS reset). Without this the User/System and IRQ banks
-    // were 0, so the BIOS reset path's first `msr cpsr,#0x1f` (System mode, at
-    // BIOS 0x90) banked in SP=0 instead of 0x03007F00 — the first recomp-vs-interp
-    // divergence (cycle 16), cascading into stack writes to address ~0 and a
-    // multi-KB IWRAM divergence. (MC-HP-002 fresh-boot root.)
-    g_cpu.banked_sp[ARM_BANK_SUPERVISOR] = 0x03007FE0;
-    g_cpu.banked_sp[ARM_BANK_IRQ]        = 0x03007FA0;
-    g_cpu.banked_sp[ARM_BANK_USER]       = 0x03007F00;
-}
-
 std::size_t count_nonzero(const uint8_t* p, std::size_t n) {
     std::size_t c = 0;
     for (std::size_t i = 0; i < n; ++i) {
@@ -1378,7 +1351,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // (SWIs serviced in-runtime, unimplemented ones falling back to LLE).
     // Config default from [bios].hle / --bios-hle; GBARECOMP_BIOS_HLE overrides
     // (0 forces LLE, any other value forces HLE). Installs the runtime_swi hook.
-    // The boot-skip decision (below, after reset_recomp_cpu) reads args.bios_hle
+    // The boot-skip decision (below, after reset_guest_cpu) reads args.bios_hle
     // + args.bios_hle_keep_intro, so resolve the env overrides into args here.
     if (const char* e = std::getenv("GBARECOMP_BIOS_HLE"))
         args.bios_hle = (e[0] && e[0] != '0');
@@ -1791,7 +1764,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     };
 
     instance.activate();
-    reset_recomp_cpu();
+    reset_guest_cpu();
     self_heal_reset();  // fresh coverage tally for this machine bring-up
 
     // Skip the BIOS intro. On a fresh boot (never when resuming a savestate),

@@ -29,4 +29,11 @@ struct GbaInstance {
     void activate();
 };
 
+// Put the calling thread's CPU state into the GBA reset condition: SVC mode,
+// IRQ and FIQ masked, ARM state, PC 0, and the canonical post-reset banked
+// stack pointers. Operates on the thread-local register file rather than on a
+// GbaInstance, so it is a free function: it resets whichever machine this
+// thread is running.
+void reset_guest_cpu();
+
 }  // namespace gbarecomp
