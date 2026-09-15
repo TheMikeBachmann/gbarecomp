@@ -31,6 +31,7 @@
 #include "host_platform.h"
 #include "host_window.h"
 #include "runtime_arm.h"
+#include "gba_instance.h"
 #include "runtime_bus_bridge.h"
 #include "save_config.h"
 #include "self_heal.h"
@@ -1367,8 +1368,9 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     }
 #endif
 
-    gba::GbaBus bus;
-    gba::GbaPpu ppu;
+    GbaInstance instance;
+    gba::GbaBus& bus = instance.bus;
+    gba::GbaPpu& ppu = instance.ppu;
     bus.set_bios(&bios);
     bus.request_audio_shadow(args.audio_shadow);  // [audio].shadow default; env can override
 
@@ -1788,9 +1790,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
         return true;
     };
 
-    set_active_bus(&bus);
-    set_active_ppu(&ppu);
-    runtime_init(&bus);
+    instance.activate();
     reset_recomp_cpu();
     self_heal_reset();  // fresh coverage tally for this machine bring-up
 

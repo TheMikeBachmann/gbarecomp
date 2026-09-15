@@ -318,6 +318,7 @@ option(GBARECOMP_ENABLE_MODS
 
 add_library(gbarecomp_runtime STATIC
     src/runtime/runtime.cpp
+    src/runtime/gba_instance.cpp
     src/runtime/save_config.cpp
     src/runtime/bios_hle.cpp
     src/runtime/generated_dispatch.cpp
