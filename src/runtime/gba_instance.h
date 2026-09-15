@@ -12,6 +12,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 #include "gba_bus.h"
 #include "gba_ppu.h"
 
@@ -21,12 +23,34 @@ struct GbaInstance {
     gba::GbaBus bus;
     gba::GbaPpu ppu;
 
+    // Host-loop bookkeeping. Advisory reporting, never guest state.
+    std::uint64_t steps            = 0;  // step_once() calls
+    std::uint64_t halt_steps       = 0;  // of those, ones that found HALT
+    std::uint64_t cycles_elapsed   = 0;  // cycles the halt pump accounted for
+    std::uint32_t last_step_cycles = 0;  // cycles pumped during the last step
+    std::uint64_t vblank_count     = 0;  // ppu.frame_count() as of the last step
+
     // Point the generated-code runtime at this machine for the calling thread:
     // subsequent bus and PPU access from recompiled guest code resolves here.
     // Also clears the host call-return stack, so this is machine bring-up, not
     // a cheap rebind — it is not yet safe to call to swap between live
     // machines.
     void activate();
+
+    // Advance devices by one scheduling quantum while the guest is halted,
+    // stopping short of the next PPU, timer or audio event so nothing is
+    // stepped over. Returns the cycles consumed.
+    std::uint32_t pump_idle(std::uint32_t max_cycles);
+
+    // Run the guest to the next host-visible boundary: pump the devices if it
+    // is halted, otherwise execute from the current PC. Always true today; the
+    // bool is the seam for an abnormal stop.
+    bool step_once();
+
+    // step_once() until the PPU reaches the next VBlank start. False means the
+    // guest never got there within the per-frame dispatch bound, which is a
+    // runaway rather than a slow frame.
+    bool step_frame();
 };
 
 // Put the calling thread's CPU state into the GBA reset condition: SVC mode,

@@ -1818,13 +1818,16 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     //     to runtime_unimplemented_op pending Phase C codegen.
     // Either way the runtime aborts with a clear message naming the
     // gap. That abort is the gate; do NOT route to the interpreter.
-    uint64_t taken = 0;
-    uint64_t cycles_elapsed = 0;
-    uint32_t last_step_cycles = 0;
-    uint64_t vblank_count = 0;
+    // The stepping loop and its counters live on the machine now, so a second
+    // machine can be driven the same way. These are names for the instance's
+    // own fields, which keeps the rest of this function unchanged.
+    uint64_t& taken = instance.steps;
+    uint64_t& cycles_elapsed = instance.cycles_elapsed;
+    uint32_t& last_step_cycles = instance.last_step_cycles;
+    uint64_t& vblank_count = instance.vblank_count;
     uint64_t vblank_irqs_raised = 0;
     uint64_t irq_entries = 0;
-    uint64_t halt_steps = 0;
+    uint64_t& halt_steps = instance.halt_steps;
     uint64_t swi_entries = 0;
     int frames_presented = 0;
     bool host_quit = false;
@@ -1834,17 +1837,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     bool host_paused = false;
 
     auto pump_idle = [&](uint32_t max_cycles) -> uint32_t {
-        uint32_t chunk = ppu.cycles_until_next_event();
-        uint32_t until_timer = bus.io().cycles_until_next_timer_event();
-        uint32_t until_sample = bus.audio().cycles_until_next_sample();
-        if (until_timer < chunk) chunk = until_timer;
-        if (until_sample < chunk) chunk = until_sample;
-        if (chunk == 0 || chunk == 0xFFFFFFFFu) chunk = 1;
-        if (chunk > max_cycles) chunk = max_cycles;
-        runtime_tick(chunk);
-        cycles_elapsed += chunk;
-        last_step_cycles += chunk;
-        return chunk;
+        return instance.pump_idle(max_cycles);
     };
 
     auto sync_frame_counter = [&]() {
@@ -1906,39 +1899,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     };
 
     auto step_once = [&]() -> bool {
-        last_step_cycles = 0;
-        // Game-thread-only: fold any worker-finished native overlays into the
-        // dispatch table so the next runtime_dispatch can use them. Cheap when
-        // idle (a single atomic load); see overlay_loader.cpp.
-        gbarecomp::overlay_drain_ready();
-        if (bus.io().halted()) {
-            ++halt_steps;
-            uint32_t idle_budget = gba::GbaPpu::kCyclesPerFrame;
-            while (bus.io().halted() && idle_budget != 0) {
-                uint32_t chunk = pump_idle(idle_budget);
-                idle_budget -= chunk;
-            }
-            ++taken;
-            sync_frame_counter();
-            return true;
-        }
-
-        // Co-simulation "interp" backend: interpret one guest instruction rather
-        // than dispatching generated code. Reuses runtime_tick/runtime_swi so the
-        // device/IRQ/BIOS/clock path is identical to the recomp backend; only
-        // main-thread instruction execution differs. See COSIM_ORACLE.md §1.
-        const uint32_t step_pc = g_cpu.R[15] & ~1u;
-        const int step_thumb = (g_cpu.cpsr & CPSR_T_BIT) != 0;
-        if (g_force_interp ||
-            (g_runtime_force_interp_hook &&
-             g_runtime_force_interp_hook(step_pc, step_thumb))) {
-            runtime_force_interp_step();
-        } else {
-            runtime_dispatch(g_cpu.R[15]);
-        }
-        ++taken;
-        sync_frame_counter();
-        return true;
+        return instance.step_once();
     };
     // Advance until the PPU reaches the next VBlank-start (scanline
     // 159->160), NOT the scanline wrap (227->0). The interpreter oracle
@@ -1950,13 +1911,7 @@ int run_game(int argc, char** argv, const RunOptions& opts) {
     // VBlank-start events; stopping on its increment puts the recomp at the
     // same PPU phase as both oracles. See runtime_bus_bridge.cpp.
     auto step_frame = [&]() -> bool {
-        uint64_t start_vbl = g_runtime_vblank_starts;
-        constexpr uint64_t kMaxDispatchesPerFrame = 2'000'000ull;
-        for (uint64_t i = 0; i < kMaxDispatchesPerFrame; ++i) {
-            if (!step_once()) return false;
-            if (g_runtime_vblank_starts != start_vbl) return true;
-        }
-        return false;
+        return instance.step_frame();
     };
 
     // ── Save-state hooks ───────────────────────────────────────────

@@ -1,5 +1,6 @@
 #include "gba_instance.h"
 
+#include "overlay_loader.h"
 #include "runtime_arm.h"
 #include "runtime_bus_bridge.h"
 
@@ -14,6 +15,64 @@ void GbaInstance::activate() {
     set_active_bus(&bus);
     set_active_ppu(&ppu);
     runtime_init(&bus);
+}
+
+std::uint32_t GbaInstance::pump_idle(std::uint32_t max_cycles) {
+    std::uint32_t chunk = ppu.cycles_until_next_event();
+    const std::uint32_t until_timer = bus.io().cycles_until_next_timer_event();
+    const std::uint32_t until_sample = bus.audio().cycles_until_next_sample();
+    if (until_timer < chunk) chunk = until_timer;
+    if (until_sample < chunk) chunk = until_sample;
+    if (chunk == 0 || chunk == 0xFFFFFFFFu) chunk = 1;
+    if (chunk > max_cycles) chunk = max_cycles;
+    runtime_tick(chunk);
+    cycles_elapsed += chunk;
+    last_step_cycles += chunk;
+    return chunk;
+}
+
+bool GbaInstance::step_once() {
+    last_step_cycles = 0;
+    // Fold any worker-finished native overlays into the dispatch table before
+    // the next dispatch can use them. Cheap when idle.
+    overlay_drain_ready();
+    if (bus.io().halted()) {
+        ++halt_steps;
+        std::uint32_t idle_budget = gba::GbaPpu::kCyclesPerFrame;
+        while (bus.io().halted() && idle_budget != 0) {
+            const std::uint32_t chunk = pump_idle(idle_budget);
+            idle_budget -= chunk;
+        }
+        ++steps;
+        vblank_count = ppu.frame_count();
+        return true;
+    }
+
+    // Co-simulation "interp" backend: interpret one guest instruction rather
+    // than dispatching generated code. Shares runtime_tick / runtime_swi with
+    // the recomp backend, so only instruction execution differs.
+    const std::uint32_t step_pc = g_cpu.R[15] & ~1u;
+    const int step_thumb = (g_cpu.cpsr & CPSR_T_BIT) != 0;
+    if (g_force_interp ||
+        (g_runtime_force_interp_hook &&
+         g_runtime_force_interp_hook(step_pc, step_thumb))) {
+        runtime_force_interp_step();
+    } else {
+        runtime_dispatch(g_cpu.R[15]);
+    }
+    ++steps;
+    vblank_count = ppu.frame_count();
+    return true;
+}
+
+bool GbaInstance::step_frame() {
+    const unsigned long long start_vbl = g_runtime_vblank_starts;
+    constexpr unsigned long long kMaxDispatchesPerFrame = 2'000'000ull;
+    for (unsigned long long i = 0; i < kMaxDispatchesPerFrame; ++i) {
+        if (!step_once()) return false;
+        if (g_runtime_vblank_starts != start_vbl) return true;
+    }
+    return false;
 }
 
 void reset_guest_cpu() {
