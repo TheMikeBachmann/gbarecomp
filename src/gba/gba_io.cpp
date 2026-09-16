@@ -509,6 +509,10 @@ void GbaIo::request_irq(uint16_t bit) {
 }
 
 void GbaIo::tick_sio(uint32_t cycles) {
+    // Multi-player delivery is independent of the Normal-mode countdown below:
+    // the parent's thread publishes an exchange, every console collects it here
+    // on its own thread.
+    sio_multiplayer_poll();
     if (!sio_transfer_active_) return;
     if (cycles < sio_cycles_remaining_) {
         sio_cycles_remaining_ -= cycles;
@@ -624,6 +628,22 @@ uint16_t GbaIo::read16(uint32_t off) {
         int timer = static_cast<int>((off - 0x100u) / 4u);
         return timer_counter_[timer];
     }
+    if (off == IoReg::SIOCNT && link_ && link_->connected()) {
+        // The cable wires these, not software: SI (bit 2) is pulled low on the
+        // parent only, the multiplayer id (bits 5-4) is the console's position
+        // in the chain, and SD (bit 3) says every console is present. A console
+        // learns whether it is the parent by reading them, so they have to be
+        // true whenever the cable is attached — not only just after a transfer.
+        // Without this every console reads an id of zero and SI low, concludes
+        // it is the parent, and none of them ever drives the exchange.
+        uint16_t cnt = load_u16(&io_[off]);
+        cnt = static_cast<uint16_t>((cnt & ~0x0030u) |
+                                    ((link_port_ & 0x3) << 4));
+        if (link_port_ != 0) cnt |= 0x0004u;
+        else                 cnt &= static_cast<uint16_t>(~0x0004u);
+        cnt |= 0x0008u;
+        return cnt;
+    }
     return load_u16(&io_[off]);
 }
 
@@ -674,6 +694,24 @@ void GbaIo::write8(uint32_t off, uint8_t v) {
             // Read-only keypad state. BIOS init writes across broad
             // IO ranges; those writes must not make "all keys pressed."
             return;
+        case IoReg::SIOCNT:
+        case IoReg::SIOCNT + 1: {
+            // The link library sets the start bit with a byte write. Merge it
+            // into the halfword and go through the one control path.
+            uint16_t cur = load_u16(&io_[IoReg::SIOCNT]);
+            if (off == IoReg::SIOCNT)
+                cur = static_cast<uint16_t>((cur & 0xFF00u) | v);
+            else
+                cur = static_cast<uint16_t>((cur & 0x00FFu) |
+                                            (static_cast<uint16_t>(v) << 8));
+            sio_control_write(cur);
+            return;
+        }
+        case IoReg::RCNT:
+        case IoReg::RCNT + 1:
+            io_[off] = v;
+            sio_update_participation();
+            return;
         case IoReg::IF:        // 0x202: low byte of IF
         case IoReg::IF + 1: {  // 0x203: high byte of IF
             // Byte-write to IF: write-1-to-clear within that byte
@@ -695,6 +733,22 @@ void GbaIo::write8(uint32_t off, uint8_t v) {
     }
 }
 
+// Bringing the link up: what does the game actually do to the SIO registers?
+// Env-gated so it costs one cached load when off. GBARECOMP_SIO_TRACE=1.
+static bool sio_trace_on() {
+    static const bool on = [] {
+        const char* e = std::getenv("GBARECOMP_SIO_TRACE");
+        return e && e[0] && e[0] != '0';
+    }();
+    return on;
+}
+static void sio_trace(const char* what, int port, uint32_t off, uint32_t v,
+                      uint16_t rcnt, uint16_t cnt) {
+    if (!sio_trace_on()) return;
+    std::fprintf(stderr, "[sio p%d] %s 0x%03X = %04X   rcnt=%04X siocnt=%04X\n",
+                 port, what, off, v, rcnt, cnt);
+}
+
 // ── Multi-player SIO (GBATEK § "SIO Multi-Player Mode") ──────────────────
 // Mode is selected by RCNT bits 15-14 = 00 together with SIOCNT bits 13-12 = 10.
 bool GbaIo::sio_multiplayer_mode() const {
@@ -703,18 +757,21 @@ bool GbaIo::sio_multiplayer_mode() const {
     return (rcnt & 0xC000u) == 0 && ((cnt >> 12) & 0x3u) == 0x2u;
 }
 
-// One exchange. Every console ends up holding all four words, indexed by
-// position on the cable, and takes a serial interrupt. A console with nothing
-// on the other end reads FFFFh everywhere and raises the error bit, which is
-// what hardware reports for a bad connection.
-void GbaIo::sio_multiplayer_exchange() {
-    std::array<uint16_t, kLinkMaxPlayers> words{
-        {kLinkNoData, kLinkNoData, kLinkNoData, kLinkNoData}};
-    const bool ok = link_ && link_->transfer(link_port_, &words);
+// Tell the cable whether to wait for this console. Called after every write
+// that can change the answer, so a console that leaves multi-player mode stops
+// holding the parent up.
+void GbaIo::sio_update_participation() {
+    if (link_) link_->set_participating(link_port_, sio_multiplayer_mode());
+}
 
+// Take delivery of one exchange. Every console ends up holding all four words,
+// indexed by position on the cable, and takes a serial interrupt. A console
+// with nothing on the other end reads FFFFh everywhere and raises the error
+// bit, which is what hardware reports for a bad connection.
+void GbaIo::sio_apply_exchange(const LinkResult& r) {
     for (int i = 0; i < kLinkMaxPlayers; ++i) {
         store_u16(&io_[IoReg::SIOMULTI0 + static_cast<uint32_t>(i) * 2u],
-                  words[static_cast<std::size_t>(i)]);
+                  r.words[static_cast<std::size_t>(i)]);
     }
 
     uint16_t cnt = load_u16(&io_[IoReg::SIOCNT]);
@@ -723,7 +780,7 @@ void GbaIo::sio_multiplayer_exchange() {
                                 ((link_port_ & 0x3) << 4));
     if (link_port_ != 0) cnt |= 0x0004u;           // SI reads low on the parent only
     else                 cnt &= static_cast<uint16_t>(~0x0004u);
-    if (ok) {
+    if (r.ok) {
         cnt &= static_cast<uint16_t>(~0x0040u);    // error clear
         cnt |= 0x0008u;                            // SD: everyone answered
     } else {
@@ -731,8 +788,98 @@ void GbaIo::sio_multiplayer_exchange() {
         cnt &= static_cast<uint16_t>(~0x0008u);
     }
     store_u16(&io_[IoReg::SIOCNT], cnt);
+    sio_mp_busy_ = false;
+
+    if (sio_trace_on()) {
+        std::fprintf(stderr,
+                     "[sio p%d] XFER %04X %04X %04X %04X ok=%d cnt=%04X\n",
+                     link_port_, r.words[0], r.words[1], r.words[2], r.words[3],
+                     r.ok ? 1 : 0, cnt);
+    }
 
     if (cnt & 0x4000u) request_irq(IrqSerial);
+}
+
+// Parent side. Nothing else on the cable can begin a transfer, so this is the
+// only place a round starts.
+void GbaIo::sio_multiplayer_start() {
+    if (!link_ || !link_->connected()) return;
+    sio_mp_busy_ = true;
+    if (!link_->run_exchange()) { sio_mp_busy_ = false; return; }
+    sio_multiplayer_poll();
+    sio_mp_busy_ = false;
+}
+
+// Child side, and the parent's own delivery. Runs from the device tick, so a
+// child takes its serial interrupt on its own thread rather than having the
+// parent reach into another machine's IO block.
+void GbaIo::sio_multiplayer_poll() {
+    if (!link_ || !link_->connected()) return;
+    // Runs on every device tick, so the "nothing has happened" answer has to
+    // cost one atomic load rather than a mutex on a lock four threads share.
+    if (link_->published_round() == sio_seen_round_) return;
+    LinkResult r;
+    if (!link_->poll_result(link_port_, &r)) return;
+    sio_seen_round_ = r.round;
+    // A console that has switched SIO to some other mode is not on the chain as
+    // far as its own registers are concerned. SIOMULTI0..3 alias the registers
+    // that mode uses, and a serial interrupt here is one the game armed for a
+    // transfer it never started. Consume the round so it is not offered again,
+    // then drop it.
+    if (!sio_multiplayer_mode()) return;
+    sio_apply_exchange(r);
+}
+
+// Every write that can change SIOCNT lands here: halfword writes, and the byte
+// writes the game's link library actually uses. Routing bytes through here is
+// load-bearing — a strb to 0x128 that skipped it would store the start bit and
+// never begin a transfer.
+void GbaIo::sio_control_write(uint16_t v) {
+    const uint16_t old = load_u16(&io_[IoReg::SIOCNT]);
+    store_u16(&io_[IoReg::SIOCNT], v);
+    sio_update_participation();
+    const bool start = (v & 0x0080u) != 0;
+    const bool start_edge = (old & 0x0080u) == 0 && start;
+    if (sio_trace_on()) {
+        std::fprintf(stderr,
+                     "[sio p%d] W CNT old=%04X new=%04X start=%d mp=%d\n",
+                     link_port_, old, v, start ? 1 : 0,
+                     sio_multiplayer_mode() ? 1 : 0);
+    }
+
+    if (sio_multiplayer_mode()) {
+        // Only the parent starts a transfer. A child writing the bit is
+        // ignored, as on hardware where it has no clock to drive.
+        //
+        // The trigger is "the bit is set and this console is idle", not a
+        // rising edge. The link library re-arms by reading SIOCNT, ORing the
+        // start bit in and writing it back, so once a transfer is outstanding
+        // the bit is already set in the value being written and there is no
+        // edge left to see. Requiring one deadlocks: no exchange runs, so the
+        // bit never clears, so no edge ever appears.
+        if (start && link_port_ == 0 && !sio_mp_busy_) sio_multiplayer_start();
+        return;
+    }
+
+    // SIO control. In Normal mode with the internal shift clock
+    // (bit 0 = 1), writing the start/busy bit (bit 7) kicks a
+    // transfer; on completion the bit auto-clears and — if bit 14
+    // (IRQ enable) is set — the Serial IRQ fires. Games (e.g. the
+    // Minish Cap) re-arm it from the handler to get a periodic IRQ.
+    // External-clock (slave) transfers never complete without a
+    // partner, so we don't arm those. (GBATEK § "SIO Normal Mode".)
+    const bool internal_clk = (v & 0x0001u) != 0;
+    if (start_edge && internal_clk && !sio_transfer_active_) {
+        // Transfer duration: bit 1 = 2 MHz(1)/256 KHz(0) clock,
+        // bit 12 = 32-bit(1)/8-bit(0). Cycle table matches GBATEK /
+        // the cycle-accurate reference: {256K·8b, 2M·8b, 256K·32b,
+        // 2M·32b} = {512, 64, 2048, 256}.
+        static constexpr uint32_t kSioCycles[4] = {512u, 64u, 2048u,
+                                                   256u};
+        uint32_t idx = ((v >> 1) & 1u) | ((v >> 11) & 2u);
+        sio_cycles_remaining_ = kSioCycles[idx];
+        sio_transfer_active_  = true;
+    }
 }
 
 void GbaIo::write16(uint32_t off, uint16_t v) {
@@ -768,57 +915,30 @@ void GbaIo::write16(uint32_t off, uint16_t v) {
             store_u16(&io_[off], static_cast<uint16_t>(v & ~0x8800u));
             return;
         case IoReg::RCNT: {
+            sio_trace("W RCNT", link_port_, off, v,
+                      load_u16(&io_[IoReg::RCNT]),
+                      load_u16(&io_[IoReg::SIOCNT]));
             // Mode select. Only the top two bits matter to us; the low bits are
             // GPIO data lines, used when SIO is switched off entirely.
             store_u16(&io_[off], v);
+            sio_update_participation();
             return;
         }
         case IoReg::SIOMLT_SEND: {
+            sio_trace("W SEND", link_port_, off, v,
+                      load_u16(&io_[IoReg::RCNT]),
+                      load_u16(&io_[IoReg::SIOCNT]));
             // The halfword this console contributes to the next exchange.
+            // Posting it is all a child does: it has no start bit of its own,
+            // and blocking here would stop a machine that hardware would have
+            // left running.
             store_u16(&io_[off], v);
             if (link_) link_->set_send(link_port_, v);
-            // A child has no start bit of its own — the parent's clock drives
-            // the transfer. Latching its outgoing word is the moment it is
-            // ready to take part, so that is where it joins the exchange.
-            if (link_ && link_->connected() && link_port_ != 0 &&
-                sio_multiplayer_mode()) {
-                sio_multiplayer_exchange();
-            }
             return;
         }
-        case IoReg::SIOCNT: {
-            const uint16_t old = load_u16(&io_[off]);
-            store_u16(&io_[off], v);
-            const bool start_edge = (old & 0x0080u) == 0 && (v & 0x0080u) != 0;
-
-            if (sio_multiplayer_mode()) {
-                // Only the parent starts a transfer. A child writing the bit is
-                // ignored, as on hardware where it has no clock to drive.
-                if (start_edge && link_port_ == 0) sio_multiplayer_exchange();
-                return;
-            }
-
-            // SIO control. In Normal mode with the internal shift clock
-            // (bit 0 = 1), writing the start/busy bit (bit 7) kicks a
-            // transfer; on completion the bit auto-clears and — if bit 14
-            // (IRQ enable) is set — the Serial IRQ fires. Games (e.g. the
-            // Minish Cap) re-arm it from the handler to get a periodic IRQ.
-            // External-clock (slave) transfers never complete without a
-            // partner, so we don't arm those. (GBATEK § "SIO Normal Mode".)
-            const bool internal_clk = (v & 0x0001u) != 0;
-            if (start_edge && internal_clk && !sio_transfer_active_) {
-                // Transfer duration: bit 1 = 2 MHz(1)/256 KHz(0) clock,
-                // bit 12 = 32-bit(1)/8-bit(0). Cycle table matches GBATEK /
-                // the cycle-accurate reference: {256K·8b, 2M·8b, 256K·32b,
-                // 2M·32b} = {512, 64, 2048, 256}.
-                static constexpr uint32_t kSioCycles[4] = {512u, 64u, 2048u,
-                                                           256u};
-                uint32_t idx = ((v >> 1) & 1u) | ((v >> 11) & 2u);
-                sio_cycles_remaining_ = kSioCycles[idx];
-                sio_transfer_active_  = true;
-            }
+        case IoReg::SIOCNT:
+            sio_control_write(v);
             return;
-        }
         default:
             break;
     }

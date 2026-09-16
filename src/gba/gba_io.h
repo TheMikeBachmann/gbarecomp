@@ -36,6 +36,7 @@ namespace gbarecomp::debug { class SnapshotWriter; class SnapshotReader; }
 namespace gba {
 
 class GbaLink;
+struct LinkResult;
 
 class GbaPpu;
 class GbaIrq;
@@ -159,7 +160,11 @@ public:
 
     // Multi-player SIO. Mode is RCNT.15-14 = 00 with SIOCNT.13-12 = 10.
     bool sio_multiplayer_mode() const;
-    void sio_multiplayer_exchange();
+    // Parent only: drive one transfer and take delivery of it.
+    void sio_multiplayer_start();
+    // Everyone: pick up an exchange this console has not seen yet. Called from
+    // the device tick, so a child takes its serial interrupt on its own thread.
+    void sio_multiplayer_poll();
 
     // True if (IE & IF) != 0 AND IME is set. The CPU's CPSR.I check
     // happens at the call site.
@@ -273,6 +278,19 @@ private:
     // start-bit rising edge written to SIOCNT; counts down to completion.
     bool     sio_transfer_active_ = false;
     uint32_t sio_cycles_remaining_ = 0;
+
+    // Multi-player transfer in flight, so the start bit written again while the
+    // parent is still inside an exchange does not stack a second one.
+    bool     sio_mp_busy_ = false;
+    // Last exchange this console applied; see sio_multiplayer_poll().
+    uint64_t sio_seen_round_ = 0;
+
+    // Every write that can change SIOCNT — halfword or byte — lands here.
+    void sio_control_write(uint16_t v);
+    // Tell the cable whether it should wait for this console.
+    void sio_update_participation();
+    // Store one exchange's words, update SIOCNT's status bits, raise the IRQ.
+    void sio_apply_exchange(const LinkResult& r);
 
     // Accumulated DMA-stolen bus cycles awaiting charge to the master clock.
     uint32_t dma_steal_cycles_ = 0;
