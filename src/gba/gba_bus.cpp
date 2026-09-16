@@ -550,7 +550,12 @@ void GbaBus::log_unmapped(uint32_t addr, uint32_t value, bool is_write, uint8_t 
     // Keep the counter hot-path cheap by default. Full stderr logging is
     // useful when chasing a specific bus issue, but gameplay can produce
     // millions of open-bus-style reads and that makes TCP replays unusable.
-    if (!std::getenv("GBARECOMP_LOG_UNMAPPED")) {
+    // Look the switch up once. Gameplay produces millions of open-bus reads, and
+    // getenv walks the environment (and takes a lock on some platforms) every
+    // call, which showed up as 16% of total run time on a guest that was reading
+    // unmapped memory heavily.
+    static const bool log_enabled = std::getenv("GBARECOMP_LOG_UNMAPPED") != nullptr;
+    if (!log_enabled) {
         return;
     }
     std::fprintf(stderr,
