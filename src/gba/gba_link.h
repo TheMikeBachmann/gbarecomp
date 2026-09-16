@@ -17,6 +17,7 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <condition_variable>
 #include <cstdint>
 #include <mutex>
@@ -55,6 +56,16 @@ public:
     // thread is left blocked in transfer().
     void shutdown();
 
+    // Exchanges attempted and exchanges where everybody turned up. The first
+    // answers "is the game using the cable at all", which is the question while
+    // bringing this up; the gap between them is how often a console was late.
+    uint64_t exchanges() const {
+        return exchanges_.load(std::memory_order_relaxed);
+    }
+    uint64_t timeouts() const {
+        return timeouts_.load(std::memory_order_relaxed);
+    }
+
 private:
     mutable std::mutex m_;
     std::condition_variable cv_;
@@ -66,6 +77,9 @@ private:
 
     // A transfer is identified by a counter so a console can tell "the exchange
     // I am joining" from "one that already finished".
+    std::atomic<uint64_t> exchanges_{0};
+    std::atomic<uint64_t> timeouts_{0};
+
     uint64_t round_ = 0;
     int arrived_ = 0;
     std::array<uint16_t, kLinkMaxPlayers> latched_{

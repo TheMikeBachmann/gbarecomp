@@ -38,6 +38,7 @@ bool GbaLink::transfer(int port, std::array<uint16_t, kLinkMaxPlayers>* out) {
     std::unique_lock<std::mutex> lk(m_);
     if (!running_ || players_ <= 1) return false;
 
+    exchanges_.fetch_add(1, std::memory_order_relaxed);
     const uint64_t my_round = round_;
 
     // Take this console's outgoing word as it stands now. Every console does
@@ -61,6 +62,7 @@ bool GbaLink::transfer(int port, std::array<uint16_t, kLinkMaxPlayers>* out) {
             // clean, and report the words we do have — absent consoles keep
             // their FFFFh, which is what a console with nothing on the other
             // end of the cable reads.
+            timeouts_.fetch_add(1, std::memory_order_relaxed);
             arrived_ = 0;
             ++round_;
             for (int i = 0; i < kLinkMaxPlayers; ++i)

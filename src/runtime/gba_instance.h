@@ -15,6 +15,7 @@
 #include <cstdint>
 
 #include "gba_bus.h"
+#include "gba_link.h"
 #include "gba_ppu.h"
 
 namespace gbarecomp {
@@ -36,6 +37,11 @@ struct GbaInstance {
     // a cheap rebind — it is not yet safe to call to swap between live
     // machines.
     void activate();
+
+    // Join this machine to a link cable at the given position in the chain.
+    // Port 0 is the parent. Must be called before activate(); a machine with no
+    // cable behaves as a console on its own.
+    void attach_link(gba::GbaLink* link, int port);
 
     // Advance devices by one scheduling quantum while the guest is halted,
     // stopping short of the next PPU, timer or audio event so nothing is

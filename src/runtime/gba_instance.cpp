@@ -6,6 +6,10 @@
 
 namespace gbarecomp {
 
+void GbaInstance::attach_link(gba::GbaLink* link, int port) {
+    bus.io().set_link(link, port);
+}
+
 void GbaInstance::activate() {
     // The IO block reaches back into the machine for two things, and both fail
     // silently when unwired.
