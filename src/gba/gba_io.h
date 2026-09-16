@@ -35,6 +35,8 @@ namespace gbarecomp::debug { class SnapshotWriter; class SnapshotReader; }
 
 namespace gba {
 
+class GbaLink;
+
 class GbaPpu;
 class GbaIrq;
 class GbaAudio;
@@ -71,7 +73,13 @@ constexpr uint32_t BG2CNT    = 0x00C;
 constexpr uint32_t BG3CNT    = 0x00E;
 constexpr uint32_t SOUNDBIAS = 0x088;  // u16
 constexpr uint32_t SIODATA32 = 0x120;  // u32 (also SIOMULTI0..3)
+constexpr uint32_t SIOMULTI0 = 0x120;  // u16 (multiplayer: data from parent)
+constexpr uint32_t SIOMULTI1 = 0x122;  // u16 (multiplayer: data from child 1)
+constexpr uint32_t SIOMULTI2 = 0x124;  // u16 (multiplayer: data from child 2)
+constexpr uint32_t SIOMULTI3 = 0x126;  // u16 (multiplayer: data from child 3)
 constexpr uint32_t SIOCNT    = 0x128;  // u16 (SIO control)
+constexpr uint32_t SIOMLT_SEND = 0x12A;  // u16 (multiplayer: data we send)
+constexpr uint32_t RCNT      = 0x134;  // u16 (SIO/GPIO/JOY mode select)
 constexpr uint32_t IE        = 0x200;  // u16
 constexpr uint32_t IF        = 0x202;  // u16  (write-1-to-clear)
 constexpr uint32_t WAITCNT   = 0x204;  // u16
@@ -103,6 +111,10 @@ public:
     // to DMAxCNT_H silently store the register without copying any
     // bytes and the BIOS's VRAM/PAL/OAM uploads vanish.
     void set_bus(armv4t::Bus* b) { bus_ = b; }
+    // Join this console to a link cable. `port` is its position in the chain:
+    // port 0 is the parent. Null detaches, which is a console on its own.
+    void set_link(GbaLink* link, int port) { link_ = link; link_port_ = port; }
+    int link_port() const { return link_port_; }
     void set_audio(GbaAudio* a) { audio_ = a; }
 
     // Bus-side entry points. `off` is the offset into the IO region
@@ -144,6 +156,10 @@ public:
     // Whether the CPU actually takes the IRQ depends on IE / IME /
     // CPSR.I, checked separately.
     void request_irq(uint16_t bit);
+
+    // Multi-player SIO. Mode is RCNT.15-14 = 00 with SIOCNT.13-12 = 10.
+    bool sio_multiplayer_mode() const;
+    void sio_multiplayer_exchange();
 
     // True if (IE & IF) != 0 AND IME is set. The CPU's CPSR.I check
     // happens at the call site.
@@ -235,6 +251,8 @@ private:
     GbaIrq*       irq_   = nullptr;
     armv4t::Bus*  bus_   = nullptr;
     GbaAudio*     audio_ = nullptr;
+    GbaLink*      link_  = nullptr;
+    int           link_port_ = 0;
 
     // Flat backing for the 1 KB IO region. Anything not specially
     // handled is just read/written here.

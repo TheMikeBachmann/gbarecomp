@@ -255,6 +255,7 @@ add_library(gbarecomp_gba STATIC
     src/gba/gba_bus.cpp
     src/gba/gba_matrix_memory.cpp
     src/gba/gba_io.cpp
+    src/gba/gba_link.cpp
     src/gba/gba_irq.cpp
     src/gba/gba_dma.cpp
     src/gba/gba_timers.cpp

@@ -2,6 +2,8 @@
 
 #include "gba_io.h"
 
+#include "gba_link.h"
+
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -693,6 +695,46 @@ void GbaIo::write8(uint32_t off, uint8_t v) {
     }
 }
 
+// ── Multi-player SIO (GBATEK § "SIO Multi-Player Mode") ──────────────────
+// Mode is selected by RCNT bits 15-14 = 00 together with SIOCNT bits 13-12 = 10.
+bool GbaIo::sio_multiplayer_mode() const {
+    const uint16_t rcnt = load_u16(&io_[IoReg::RCNT]);
+    const uint16_t cnt  = load_u16(&io_[IoReg::SIOCNT]);
+    return (rcnt & 0xC000u) == 0 && ((cnt >> 12) & 0x3u) == 0x2u;
+}
+
+// One exchange. Every console ends up holding all four words, indexed by
+// position on the cable, and takes a serial interrupt. A console with nothing
+// on the other end reads FFFFh everywhere and raises the error bit, which is
+// what hardware reports for a bad connection.
+void GbaIo::sio_multiplayer_exchange() {
+    std::array<uint16_t, kLinkMaxPlayers> words{
+        {kLinkNoData, kLinkNoData, kLinkNoData, kLinkNoData}};
+    const bool ok = link_ && link_->transfer(link_port_, &words);
+
+    for (int i = 0; i < kLinkMaxPlayers; ++i) {
+        store_u16(&io_[IoReg::SIOMULTI0 + static_cast<uint32_t>(i) * 2u],
+                  words[static_cast<std::size_t>(i)]);
+    }
+
+    uint16_t cnt = load_u16(&io_[IoReg::SIOCNT]);
+    cnt &= static_cast<uint16_t>(~0x0080u);        // start/busy clears on completion
+    cnt = static_cast<uint16_t>((cnt & ~0x0030u) | // our id lives in bits 5-4
+                                ((link_port_ & 0x3) << 4));
+    if (link_port_ != 0) cnt |= 0x0004u;           // SI reads low on the parent only
+    else                 cnt &= static_cast<uint16_t>(~0x0004u);
+    if (ok) {
+        cnt &= static_cast<uint16_t>(~0x0040u);    // error clear
+        cnt |= 0x0008u;                            // SD: everyone answered
+    } else {
+        cnt |= 0x0040u;                            // error: somebody did not
+        cnt &= static_cast<uint16_t>(~0x0008u);
+    }
+    store_u16(&io_[IoReg::SIOCNT], cnt);
+
+    if (cnt & 0x4000u) request_irq(IrqSerial);
+}
+
 void GbaIo::write16(uint32_t off, uint16_t v) {
     if (off + 1 >= kIoSize) { warn_unhandled(off, v, true, 2); return; }
     if (!g_mmio_split) mmio_cap_record(0x04000000u + off, v, 2);
@@ -725,7 +767,37 @@ void GbaIo::write16(uint32_t off, uint16_t v) {
             // SOUNDCNT_H reset bits (FIFO A/B clear) are write-only.
             store_u16(&io_[off], static_cast<uint16_t>(v & ~0x8800u));
             return;
+        case IoReg::RCNT: {
+            // Mode select. Only the top two bits matter to us; the low bits are
+            // GPIO data lines, used when SIO is switched off entirely.
+            store_u16(&io_[off], v);
+            return;
+        }
+        case IoReg::SIOMLT_SEND: {
+            // The halfword this console contributes to the next exchange.
+            store_u16(&io_[off], v);
+            if (link_) link_->set_send(link_port_, v);
+            // A child has no start bit of its own — the parent's clock drives
+            // the transfer. Latching its outgoing word is the moment it is
+            // ready to take part, so that is where it joins the exchange.
+            if (link_ && link_->connected() && link_port_ != 0 &&
+                sio_multiplayer_mode()) {
+                sio_multiplayer_exchange();
+            }
+            return;
+        }
         case IoReg::SIOCNT: {
+            const uint16_t old = load_u16(&io_[off]);
+            store_u16(&io_[off], v);
+            const bool start_edge = (old & 0x0080u) == 0 && (v & 0x0080u) != 0;
+
+            if (sio_multiplayer_mode()) {
+                // Only the parent starts a transfer. A child writing the bit is
+                // ignored, as on hardware where it has no clock to drive.
+                if (start_edge && link_port_ == 0) sio_multiplayer_exchange();
+                return;
+            }
+
             // SIO control. In Normal mode with the internal shift clock
             // (bit 0 = 1), writing the start/busy bit (bit 7) kicks a
             // transfer; on completion the bit auto-clears and — if bit 14
@@ -733,10 +805,7 @@ void GbaIo::write16(uint32_t off, uint16_t v) {
             // Minish Cap) re-arm it from the handler to get a periodic IRQ.
             // External-clock (slave) transfers never complete without a
             // partner, so we don't arm those. (GBATEK § "SIO Normal Mode".)
-            uint16_t old = load_u16(&io_[off]);
-            store_u16(&io_[off], v);
-            bool start_edge    = (old & 0x0080u) == 0 && (v & 0x0080u) != 0;
-            bool internal_clk  = (v & 0x0001u) != 0;
+            const bool internal_clk = (v & 0x0001u) != 0;
             if (start_edge && internal_clk && !sio_transfer_active_) {
                 // Transfer duration: bit 1 = 2 MHz(1)/256 KHz(0) clock,
                 // bit 12 = 32-bit(1)/8-bit(0). Cycle table matches GBATEK /
