@@ -7,11 +7,16 @@
 namespace gbarecomp {
 
 void GbaInstance::activate() {
-    // The IO block answers VCOUNT and the DISPSTAT compare bits straight from
-    // the PPU, and returns zero when it has no PPU to ask. A machine missing
-    // this wiring still runs and still counts frames, but every VCOUNT read the
-    // guest makes comes back 0 — so a scanline-polling wait loop never ends.
+    // The IO block reaches back into the machine for two things, and both fail
+    // silently when unwired.
+    //
+    // Without the PPU it answers every VCOUNT read with 0, so a scanline-polling
+    // wait loop never ends. Without the bus it has nothing to move data through,
+    // so DMA transfers never happen: no data moves and no bus cycles are stolen,
+    // which drifts the clock away from a correctly wired machine and eventually
+    // desynchronises device timing badly enough to crash the guest.
     bus.io().set_ppu(&ppu);
+    bus.io().set_bus(&bus);
     set_active_bus(&bus);
     set_active_ppu(&ppu);
     runtime_init(&bus);
